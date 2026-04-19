@@ -231,6 +231,34 @@ describe('App', () => {
     expect(videoFilter).not.toContain('fps=30')
   })
 
+  it('can switch output resolution to 720p', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<App />)
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+
+    await user.upload(
+      input,
+      new File(['clip'], 'midfield.mp4', { type: 'video/mp4' }),
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: /set output resolution to 720p/i }),
+    )
+    await user.click(screen.getByRole('button', { name: /build content pack/i }))
+
+    await waitFor(() => {
+      expect(ffmpegTestState.instances[0].exec).toHaveBeenCalled()
+    })
+
+    const encodeCall = ffmpegTestState.instances[0].exec.mock.calls.find(
+      ([args]) => (args as string[]).includes('-c:v'),
+    )?.[0] as string[]
+    const videoFilter = encodeCall[encodeCall.indexOf('-vf') + 1]
+
+    expect(videoFilter).toContain('scale=1280:720')
+    expect(videoFilter).toContain('pad=1280:720')
+  })
+
   it('shows the active step while compiling', async () => {
     const user = userEvent.setup()
     const { container } = render(<App />)

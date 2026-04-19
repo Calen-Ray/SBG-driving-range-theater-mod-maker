@@ -30,8 +30,6 @@ import {
 import './App.css'
 
 const MAX_FILES = 20
-const TARGET_WIDTH = 1920
-const TARGET_HEIGHT = 1080
 const LOCKED_FRAME_RATE = 30
 const THEATER_DEPENDENCY = 'Cray-DrivingRangeTheater-0.1.0'
 
@@ -57,6 +55,16 @@ type EncodingPreset = {
   crf: string
   audioQuality: string
   etaHint: string
+}
+
+type OutputResolutionId = '480p' | '720p' | '1080p'
+
+type OutputResolution = {
+  id: OutputResolutionId
+  label: string
+  width: number
+  height: number
+  speedHint: string
 }
 
 type BuiltAsset = {
@@ -129,11 +137,37 @@ const encodingPresets: EncodingPreset[] = [
   },
 ]
 
+const outputResolutions: OutputResolution[] = [
+  {
+    id: '480p',
+    label: '480p',
+    width: 854,
+    height: 480,
+    speedHint: 'Fastest encode, softest image',
+  },
+  {
+    id: '720p',
+    label: '720p',
+    width: 1280,
+    height: 720,
+    speedHint: 'Good speed and smaller exports',
+  },
+  {
+    id: '1080p',
+    label: '1080p',
+    width: 1920,
+    height: 1080,
+    speedHint: 'Highest resolution, slowest encode',
+  },
+]
+
 function App() {
   const [jobs, setJobs] = useState<CompileJob[]>([])
   const [packSettings, setPackSettings] = useState<PackSettings>(defaultSettings)
   const [encodingPresetId, setEncodingPresetId] =
     useState<EncodingPresetId>('good')
+  const [outputResolutionId, setOutputResolutionId] =
+    useState<OutputResolutionId>('1080p')
   const [disableThirtyFpsLock, setDisableThirtyFpsLock] = useState(false)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const [ffmpegState, setFfmpegState] = useState<'idle' | 'loading' | 'ready'>(
@@ -239,9 +273,16 @@ function App() {
     [encodingPresetId],
   )
 
+  const activeResolution = useMemo(
+    () =>
+      outputResolutions.find((resolution) => resolution.id === outputResolutionId) ??
+      outputResolutions[2],
+    [outputResolutionId],
+  )
+
   const videoTargetLabel = disableThirtyFpsLock
-    ? `${TARGET_WIDTH}x${TARGET_HEIGHT}, H.264 High, yuv420p, source FPS preserved`
-    : `${TARGET_WIDTH}x${TARGET_HEIGHT}, ${LOCKED_FRAME_RATE} fps, H.264 High, yuv420p`
+    ? `${activeResolution.width}x${activeResolution.height}, H.264 High, yuv420p, source FPS preserved`
+    : `${activeResolution.width}x${activeResolution.height}, ${LOCKED_FRAME_RATE} fps, H.264 High, yuv420p`
 
   const appendLog = (entry: string) => {
     startTransition(() => {
@@ -582,8 +623,8 @@ function App() {
           appendLog(`Encoding ${job.outputVideoName}`)
 
           const videoFilter = [
-            `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease`,
-            `pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black`,
+            `scale=${activeResolution.width}:${activeResolution.height}:force_original_aspect_ratio=decrease`,
+            `pad=${activeResolution.width}:${activeResolution.height}:(ow-iw)/2:(oh-ih)/2:color=black`,
           ]
 
           if (!disableThirtyFpsLock) {
@@ -745,6 +786,7 @@ function App() {
         version,
         packSettings,
         activePreset,
+        activeResolution,
         disableThirtyFpsLock,
         jobsRef.current,
         builtAssetsRef.current,
@@ -783,10 +825,10 @@ function App() {
           <p className="eyebrow">DrivingRangeTheater compiler</p>
           <h1>Turn raw clips into a drop-in theater content pack.</h1>
           <p className="hero-summary">
-            Re-encode up to {MAX_FILES} mixed-format videos into {TARGET_WIDTH}x
-            {TARGET_HEIGHT} H.264 MP4, extract matching OGG sidecar audio, then
-            export a Thunderstore-style zip with <code>Videos/</code> at the
-            root.
+            Re-encode up to {MAX_FILES} mixed-format videos into{' '}
+            {activeResolution.width}x{activeResolution.height} H.264 MP4,
+            extract matching OGG sidecar audio, then export a Thunderstore-style
+            zip with <code>Videos/</code> at the root.
           </p>
           <div className="hero-metrics">
             <div>
@@ -1075,6 +1117,33 @@ function App() {
                 </small>
               </button>
             </label>
+            <label className="wide">
+              <span>Output resolution</span>
+              <div className="option-grid">
+                {outputResolutions.map((resolution) => (
+                  <button
+                    key={resolution.id}
+                    className={`option-card ${
+                      resolution.id === activeResolution.id ? 'active' : ''
+                    }`}
+                    type="button"
+                    disabled={isCompiling}
+                    aria-label={`Set output resolution to ${resolution.label}`}
+                    onClick={() => setOutputResolutionId(resolution.id)}
+                  >
+                    <strong>{resolution.label}</strong>
+                    <small>
+                      {resolution.width}x{resolution.height}
+                    </small>
+                    <small>{resolution.speedHint}</small>
+                  </button>
+                ))}
+              </div>
+              <small className="field-note">
+                Lower resolutions usually encode faster and produce smaller files,
+                especially on longer clips.
+              </small>
+            </label>
           </div>
 
           <div className="spec-grid">
@@ -1178,6 +1247,7 @@ async function buildZipArchive(
   version: string,
   settings: PackSettings,
   preset: EncodingPreset,
+  resolution: OutputResolution,
   disableThirtyFpsLock: boolean,
   jobs: CompileJob[],
   builtAssets: Map<string, BuiltAsset>,
@@ -1218,7 +1288,7 @@ ${clipLines}
 
 ## Output format
 
-- MP4 video encoded as H.264 High / yuv420p at ${TARGET_WIDTH}x${TARGET_HEIGHT}
+- MP4 video encoded as H.264 High / yuv420p at ${resolution.width}x${resolution.height}
 - Frame rate: ${
     disableThirtyFpsLock
       ? 'source FPS preserved'

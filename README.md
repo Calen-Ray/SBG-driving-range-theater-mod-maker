@@ -9,6 +9,7 @@ Static web app for building `DrivingRangeTheater` content packs in the browser.
 - Extracts sidecar `.ogg` audio with the same basename when the source has audio
 - Prefixes filenames numerically so the mod plays them in the chosen order
 - Offers `Draft`, `Fastest`, and `Good` encoding presets
+- Offers `480p`, `720p`, and `1080p` output targets, with lower resolutions usually encoding faster
 - Exports a Thunderstore-style zip with `manifest.json`, `README.md`, `icon.png`, and `Videos/` at the archive root
 
 ## Local development
