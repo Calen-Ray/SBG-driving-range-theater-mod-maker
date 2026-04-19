@@ -177,6 +177,25 @@
   padding: 1.4rem;
 }
 
+.queue-panel {
+  position: relative;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+.queue-panel.drag-active {
+  border-color: rgba(56, 189, 248, 0.46);
+  box-shadow:
+    0 20px 48px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 1px rgba(56, 189, 248, 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.1), transparent 42%),
+    linear-gradient(180deg, rgba(13, 17, 26, 0.94), rgba(7, 9, 14, 0.94)),
+    rgba(13, 17, 26, 0.9);
+}
+
 .panel-header {
   display: flex;
   align-items: flex-start;
@@ -195,6 +214,13 @@
     rgba(9, 12, 19, 0.78);
   cursor: pointer;
   margin-bottom: 1rem;
+}
+
+.dropzone.drag-active {
+  border-color: rgba(103, 232, 249, 0.85);
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.24), transparent 55%),
+    rgba(9, 12, 19, 0.92);
 }
 
 .dropzone.disabled {

@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, startTransition } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  startTransition,
+  type DragEvent,
+} from 'react'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
 import JSZip from 'jszip'
@@ -135,6 +142,7 @@ function App() {
   const [packSettings, setPackSettings] = useState<PackSettings>(defaultSettings)
   const [encodingPresetId, setEncodingPresetId] =
     useState<EncodingPresetId>('balanced')
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const [ffmpegState, setFfmpegState] = useState<'idle' | 'loading' | 'ready'>(
     'idle',
   )
@@ -160,6 +168,7 @@ function App() {
   const jobsRef = useRef<CompileJob[]>([])
   const builtAssetsRef = useRef<Map<string, BuiltAsset>>(new Map())
   const dropzoneRef = useRef<HTMLInputElement | null>(null)
+  const dragDepthRef = useRef(0)
 
   useEffect(() => {
     jobsRef.current = jobs
@@ -278,6 +287,52 @@ function App() {
     }
 
     replaceJobs(merged.map(createJob))
+  }
+
+  const handleDragEnter = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault()
+    if (isCompiling || !hasVideoDrag(event.dataTransfer)) {
+      return
+    }
+
+    dragDepthRef.current += 1
+    setIsDraggingFiles(true)
+  }
+
+  const handleDragOver = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault()
+    if (isCompiling || !hasVideoDrag(event.dataTransfer)) {
+      return
+    }
+
+    event.dataTransfer.dropEffect = 'copy'
+    if (!isDraggingFiles) {
+      setIsDraggingFiles(true)
+    }
+  }
+
+  const handleDragLeave = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault()
+    if (isCompiling || !hasVideoDrag(event.dataTransfer)) {
+      return
+    }
+
+    dragDepthRef.current = Math.max(dragDepthRef.current - 1, 0)
+    if (dragDepthRef.current === 0) {
+      setIsDraggingFiles(false)
+    }
+  }
+
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault()
+    dragDepthRef.current = 0
+    setIsDraggingFiles(false)
+
+    if (isCompiling || !event.dataTransfer.files.length) {
+      return
+    }
+
+    handleFilesAdded(event.dataTransfer.files)
   }
 
   const moveJob = (id: string, direction: -1 | 1) => {
@@ -733,7 +788,13 @@ function App() {
       </section>
 
       <section className="workspace-grid">
-        <div className="panel queue-panel">
+        <div
+          className={`panel queue-panel ${isDraggingFiles ? 'drag-active' : ''}`}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           <div className="panel-header">
             <div>
               <p className="panel-kicker">1. Queue</p>
@@ -750,14 +811,7 @@ function App() {
           </div>
 
           <label
-            className={`dropzone ${isCompiling ? 'disabled' : ''}`}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault()
-              if (!isCompiling && event.dataTransfer.files.length) {
-                handleFilesAdded(event.dataTransfer.files)
-              }
-            }}
+            className={`dropzone ${isCompiling ? 'disabled' : ''} ${isDraggingFiles ? 'drag-active' : ''}`}
           >
             <input
               ref={dropzoneRef}
@@ -1226,7 +1280,7 @@ async function cleanupWorkspace(ffmpeg: FFmpeg, paths: string[]) {
 
 function createJob(file: File): CompileJob {
   return {
-    id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+    id: buildJobId(file),
     file,
     order: 0,
     status: 'queued',
@@ -1341,6 +1395,29 @@ function trimForIcon(value: string) {
 
 function getTimestamp() {
   return performance.now()
+}
+
+function buildJobId(file: File) {
+  return `${file.name}-${file.size}-${file.lastModified}-${createUniqueToken()}`
+}
+
+function createUniqueToken() {
+  if (
+    typeof globalThis.crypto !== 'undefined' &&
+    typeof globalThis.crypto.randomUUID === 'function'
+  ) {
+    return globalThis.crypto.randomUUID()
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function hasVideoDrag(dataTransfer: DataTransfer | null) {
+  if (!dataTransfer) {
+    return false
+  }
+
+  return Array.from(dataTransfer.types).includes('Files')
 }
 
 export default App
