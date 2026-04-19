@@ -6,8 +6,10 @@ import {
   formatEta,
   hasVideoDrag,
   normalizeJobs,
+  normalizeStageProgress,
   sanitizeManifestName,
   sanitizeVersion,
+  stageLabel,
 } from './compiler-utils'
 
 describe('compiler-utils', () => {
@@ -63,5 +65,19 @@ describe('compiler-utils', () => {
       hasVideoDrag({ types: ['text/plain'] } as unknown as DataTransfer),
     ).toBe(false)
     expect(hasVideoDrag(null)).toBe(false)
+  })
+
+  it('normalizes stage progress from ffmpeg time when duration is known', () => {
+    expect(normalizeStageProgress(0.05, 5_000_000, 10)).toBe(0.5)
+    expect(normalizeStageProgress(0.05, 5_000, 10)).toBe(0.5)
+    expect(normalizeStageProgress(0.25, 0, null)).toBe(0.25)
+  })
+
+  it('derives a readable step label from the current stage', () => {
+    expect(stageLabel('queued')).toBe('Queued')
+    expect(stageLabel('probing')).toBe('Inspecting source file')
+    expect(stageLabel('encoding', 0.01)).toBe('Starting encode')
+    expect(stageLabel('encoding', 0.5)).toBe('Encoding video')
+    expect(stageLabel('extracting', 1)).toBe('Finalizing audio')
   })
 })

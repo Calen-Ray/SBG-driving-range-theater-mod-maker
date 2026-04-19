@@ -11,6 +11,7 @@ export type CompileJob = {
   file: File
   order: number
   status: JobStatus
+  stepLabel: string
   progress: number
   etaSeconds: number | null
   outputVideoName: string
@@ -28,6 +29,7 @@ export function createJob(file: File): CompileJob {
     file,
     order: 0,
     status: 'queued',
+    stepLabel: 'Queued',
     progress: 0,
     etaSeconds: null,
     outputVideoName: '',
@@ -56,6 +58,7 @@ export function normalizeJobs(jobs: CompileJob[]): CompileJob[] {
       outputVideoName: `${prefix}-${uniqueStem}.mp4`,
       outputAudioName: `${prefix}-${uniqueStem}.ogg`,
       status: 'queued',
+      stepLabel: 'Queued',
       progress: 0,
       etaSeconds: null,
       error: null,
@@ -165,4 +168,66 @@ export function hasVideoDrag(dataTransfer: DataTransfer | null) {
   }
 
   return Array.from(dataTransfer.types).includes('Files')
+}
+
+export function normalizeStageProgress(
+  progress: number,
+  time: number,
+  durationSeconds: number | null,
+) {
+  const rawProgress = clamp01(progress)
+  if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return rawProgress
+  }
+
+  if (!Number.isFinite(time) || time < 0) {
+    return rawProgress
+  }
+
+  let processedSeconds = time
+  if (time > durationSeconds * 10_000) {
+    processedSeconds = time / 1_000_000
+  } else if (time > durationSeconds * 10) {
+    processedSeconds = time / 1000
+  }
+
+  return clamp01(processedSeconds / durationSeconds)
+}
+
+export function stageLabel(
+  stage: JobStatus | 'idle',
+  progress?: number,
+) {
+  const safeProgress = clamp01(progress ?? 0)
+
+  switch (stage) {
+    case 'probing':
+      return 'Inspecting source file'
+    case 'encoding':
+      if (safeProgress < 0.04) {
+        return 'Starting encode'
+      }
+      if (safeProgress < 0.98) {
+        return 'Encoding video'
+      }
+      return 'Finalizing MP4'
+    case 'extracting':
+      return safeProgress < 0.98 ? 'Extracting audio' : 'Finalizing audio'
+    case 'done':
+      return 'Pack ready'
+    case 'error':
+      return 'Build failed'
+    case 'queued':
+      return 'Queued'
+    default:
+      return 'Idle'
+  }
+}
+
+function clamp01(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.min(Math.max(value, 0), 1)
 }

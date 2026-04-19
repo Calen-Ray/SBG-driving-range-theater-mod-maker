@@ -8,7 +8,7 @@ Static web app for building `DrivingRangeTheater` content packs in the browser.
 - Re-encodes each clip to `1920x1080` MP4 using H.264 High / `yuv420p`
 - Extracts sidecar `.ogg` audio with the same basename when the source has audio
 - Prefixes filenames numerically so the mod plays them in the chosen order
-- Offers `Fastest`, `Balanced`, and `Quality` encoding presets
+- Offers `Draft`, `Fastest`, and `Good` encoding presets
 - Exports a Thunderstore-style zip with `manifest.json`, `README.md`, `icon.png`, and `Videos/` at the archive root
 
 ## Local development

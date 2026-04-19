@@ -20,8 +20,10 @@ import {
   hasVideoDrag,
   makeWorkspaceName,
   normalizeJobs,
+  normalizeStageProgress,
   sanitizeManifestName,
   sanitizeVersion,
+  stageLabel,
   trimForIcon,
   type CompileJob,
 } from './lib/compiler-utils'
@@ -30,6 +32,7 @@ import './App.css'
 const MAX_FILES = 20
 const TARGET_WIDTH = 1920
 const TARGET_HEIGHT = 1080
+const LOCKED_FRAME_RATE = 30
 const THEATER_DEPENDENCY = 'Cray-DrivingRangeTheater-0.1.0'
 
 type JobStage = 'idle' | 'probing' | 'encoding' | 'extracting'
@@ -44,7 +47,7 @@ type PackSettings = {
   readmeNotes: string
 }
 
-type EncodingPresetId = 'fastest' | 'balanced' | 'quality'
+type EncodingPresetId = 'draft' | 'fastest' | 'good'
 
 type EncodingPreset = {
   id: EncodingPresetId
@@ -98,31 +101,31 @@ const stageWeights: Record<JobStage, { start: number; span: number }> = {
 
 const encodingPresets: EncodingPreset[] = [
   {
+    id: 'draft',
+    label: 'Draft',
+    description: 'Lowest-quality preview export for quick fit checks and rough iteration.',
+    videoPreset: 'ultrafast',
+    crf: '30',
+    audioQuality: '2',
+    etaHint: 'Quickest, lowest quality',
+  },
+  {
     id: 'fastest',
     label: 'Fastest',
-    description: 'Prioritizes speed and smaller wait times over compression efficiency.',
-    videoPreset: 'ultrafast',
+    description: 'Prioritizes speed while keeping better image quality than the draft preset.',
+    videoPreset: 'veryfast',
     crf: '25',
     audioQuality: '3',
-    etaHint: 'Best for quick drafts',
+    etaHint: 'Fast turnarounds',
   },
   {
-    id: 'balanced',
-    label: 'Balanced',
-    description: 'Default compromise between encode time, output size, and visual quality.',
-    videoPreset: 'veryfast',
-    crf: '22',
-    audioQuality: '4',
-    etaHint: 'Good default for most packs',
-  },
-  {
-    id: 'quality',
-    label: 'Quality',
-    description: 'Spends more CPU time to preserve detail and reduce visible artifacts.',
+    id: 'good',
+    label: 'Good',
+    description: 'Higher-quality output when you want a cleaner final pack and can wait longer.',
     videoPreset: 'medium',
     crf: '19',
     audioQuality: '5',
-    etaHint: 'Slowest, highest quality',
+    etaHint: 'Best final output',
   },
 ]
 
@@ -130,7 +133,8 @@ function App() {
   const [jobs, setJobs] = useState<CompileJob[]>([])
   const [packSettings, setPackSettings] = useState<PackSettings>(defaultSettings)
   const [encodingPresetId, setEncodingPresetId] =
-    useState<EncodingPresetId>('balanced')
+    useState<EncodingPresetId>('good')
+  const [disableThirtyFpsLock, setDisableThirtyFpsLock] = useState(false)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const [ffmpegState, setFfmpegState] = useState<'idle' | 'loading' | 'ready'>(
     'idle',
@@ -141,6 +145,7 @@ function App() {
   const [isCompiling, setIsCompiling] = useState(false)
   const [overallProgress, setOverallProgress] = useState(0)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
+  const [currentStepLabel, setCurrentStepLabel] = useState('Idle')
   const [downloadBundle, setDownloadBundle] = useState<DownloadBundle | null>(
     null,
   )
@@ -190,6 +195,11 @@ function App() {
     [jobs],
   )
 
+  const activeJob = useMemo(
+    () => jobs.find((job) => job.id === currentJobId) ?? null,
+    [currentJobId, jobs],
+  )
+
   const overallEta = useMemo(() => {
     if (!jobs.length) {
       return null
@@ -228,6 +238,10 @@ function App() {
       encodingPresets[1],
     [encodingPresetId],
   )
+
+  const videoTargetLabel = disableThirtyFpsLock
+    ? `${TARGET_WIDTH}x${TARGET_HEIGHT}, H.264 High, yuv420p, source FPS preserved`
+    : `${TARGET_WIDTH}x${TARGET_HEIGHT}, ${LOCKED_FRAME_RATE} fps, H.264 High, yuv420p`
 
   const appendLog = (entry: string) => {
     startTransition(() => {
@@ -363,14 +377,20 @@ function App() {
   const ensureFfmpeg = async () => {
     if (!ffmpegRef.current) {
       const ffmpeg = new FFmpeg()
-      ffmpeg.on('progress', ({ progress }) => {
+      ffmpeg.on('progress', ({ progress, time }) => {
         const runtime = runtimeRef.current
         if (!runtime.jobId || runtime.stage === 'idle') {
           return
         }
 
         const stageWeight = stageWeights[runtime.stage]
-        const clampedProgress = Math.min(Math.max(progress, 0), 1)
+        const job =
+          jobsRef.current.find((entry) => entry.id === runtime.jobId) ?? null
+        const clampedProgress = normalizeStageProgress(
+          progress ?? 0,
+          time ?? 0,
+          job?.durationSeconds ?? null,
+        )
         const overallJobProgress =
           stageWeight.start + clampedProgress * stageWeight.span
         const elapsedSeconds = (performance.now() - runtime.startedAt) / 1000
@@ -379,23 +399,23 @@ function App() {
             ? Math.max(elapsedSeconds / overallJobProgress - elapsedSeconds, 0)
             : null
 
-        setJobs((current) =>
-          current.map((job) =>
+        setJobs((current) => {
+          const nextJobs = current.map((job) =>
             job.id === runtime.jobId
               ? {
                   ...job,
                   progress: overallJobProgress,
                   etaSeconds,
+                  stepLabel: stageLabel(runtime.stage, clampedProgress),
                 }
               : job,
-          ),
-        )
-
-        const queue = jobsRef.current
-        const totalProgress =
-          queue.reduce((sum, job) => sum + job.progress, 0) /
-          Math.max(queue.length, 1)
-        setOverallProgress(totalProgress)
+          )
+          const totalProgress =
+            nextJobs.reduce((sum, entry) => sum + entry.progress, 0) /
+            Math.max(nextJobs.length, 1)
+          setOverallProgress(totalProgress)
+          return nextJobs
+        })
       })
 
       ffmpeg.on('log', ({ message }) => {
@@ -469,11 +489,13 @@ function App() {
     setIsCompiling(true)
     setOverallProgress(0)
     setCurrentJobId(null)
+    setCurrentStepLabel('Queued')
 
     setJobs((current) =>
       current.map((job) => ({
         ...job,
         status: 'queued',
+        stepLabel: 'Queued',
         progress: 0,
         etaSeconds: null,
         durationSeconds: null,
@@ -494,6 +516,7 @@ function App() {
           stage: 'probing',
           startedAt: getTimestamp(),
         }
+        setCurrentStepLabel('Inspecting source file')
 
         setJobs((current) =>
           current.map((entry) =>
@@ -501,6 +524,7 @@ function App() {
               ? {
                   ...entry,
                   status: 'probing',
+                  stepLabel: 'Inspecting source file',
                   progress: stageWeights.probing.start,
                   etaSeconds: null,
                 }
@@ -538,28 +562,47 @@ function App() {
           runtimeRef.current = {
             jobId: job.id,
             stage: 'encoding',
-            startedAt: getTimestamp(),
+            startedAt: runtimeRef.current.startedAt,
           }
+          setCurrentStepLabel('Encoding video')
 
           setJobs((current) =>
             current.map((entry) =>
               entry.id === job.id
                 ? {
-                    ...entry,
-                    status: 'encoding',
-                    progress: stageWeights.encoding.start,
-                  }
+                  ...entry,
+                  status: 'encoding',
+                  stepLabel: 'Encoding video',
+                  progress: stageWeights.encoding.start,
+                }
                 : entry,
             ),
           )
 
           appendLog(`Encoding ${job.outputVideoName}`)
 
+          const videoFilter = [
+            `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease`,
+            `pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black`,
+          ]
+
+          if (!disableThirtyFpsLock) {
+            videoFilter.push(`fps=${LOCKED_FRAME_RATE}`)
+          }
+
           const encodeExitCode = await ffmpeg.exec([
             '-i',
             inputName,
             '-vf',
-            `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black`,
+            videoFilter.join(','),
+            '-map',
+            '0:v:0',
+            '-map_metadata',
+            '-1',
+            '-map_chapters',
+            '-1',
+            '-sn',
+            '-dn',
             '-c:v',
             'libx264',
             '-profile:v',
@@ -587,17 +630,19 @@ function App() {
             runtimeRef.current = {
               jobId: job.id,
               stage: 'extracting',
-              startedAt: getTimestamp(),
+              startedAt: runtimeRef.current.startedAt,
             }
+            setCurrentStepLabel('Extracting audio')
 
             setJobs((current) =>
               current.map((entry) =>
                 entry.id === job.id
                   ? {
-                      ...entry,
-                      status: 'extracting',
-                      progress: stageWeights.extracting.start,
-                    }
+                    ...entry,
+                    status: 'extracting',
+                    stepLabel: 'Extracting audio',
+                    progress: stageWeights.extracting.start,
+                  }
                   : entry,
               ),
             )
@@ -607,6 +652,14 @@ function App() {
             const audioExitCode = await ffmpeg.exec([
               '-i',
               inputName,
+              '-map',
+              '0:a:0',
+              '-map_metadata',
+              '-1',
+              '-map_chapters',
+              '-1',
+              '-sn',
+              '-dn',
               '-vn',
               '-c:a',
               'libvorbis',
@@ -636,6 +689,7 @@ function App() {
                 ? {
                     ...entry,
                     status: 'done',
+                    stepLabel: audioData ? 'Pack ready' : 'Video ready',
                     progress: 1,
                     etaSeconds: 0,
                     videoSize: encodedData.byteLength,
@@ -656,6 +710,7 @@ function App() {
                 ? {
                     ...entry,
                     status: 'error',
+                    stepLabel: 'Build failed',
                     error: message,
                     etaSeconds: null,
                   }
@@ -690,6 +745,7 @@ function App() {
         version,
         packSettings,
         activePreset,
+        disableThirtyFpsLock,
         jobsRef.current,
         builtAssetsRef.current,
       )
@@ -703,8 +759,10 @@ function App() {
         generatedAt: new Date().toLocaleString(),
       })
       setOverallProgress(1)
+      setCurrentStepLabel('Pack ready')
       appendLog(`Pack ready: ${fileName}`)
     } catch (error) {
+      setCurrentStepLabel('Build failed')
       appendLog(
         error instanceof Error
           ? error.message
@@ -773,6 +831,14 @@ function App() {
             <div>
               <span>ETA</span>
               <strong>{overallEta != null ? formatEta(overallEta) : 'Tracking'}</strong>
+            </div>
+            <div>
+              <span>Current step</span>
+              <strong>{currentStepLabel}</strong>
+            </div>
+            <div>
+              <span>Active file</span>
+              <strong>{activeJob?.outputVideoName ?? 'Waiting'}</strong>
             </div>
           </div>
           <p className="engine-message">{engineMessage}</p>
@@ -871,10 +937,10 @@ function App() {
                       {job.status === 'error'
                         ? job.error ?? 'Build failed'
                         : job.etaSeconds != null && job.status !== 'done'
-                          ? `ETA ${formatEta(job.etaSeconds)}`
+                          ? `${job.stepLabel} · ETA ${formatEta(job.etaSeconds)}`
                           : job.status === 'done'
                             ? `Built ${formatBytes((job.videoSize ?? 0) + (job.audioSize ?? 0))}`
-                            : 'Waiting'}
+                            : job.stepLabel}
                     </span>
                     <div className="job-actions">
                       <button
@@ -983,6 +1049,32 @@ function App() {
                 }
               />
             </label>
+            <label className="wide toggle-field">
+              <span>Frame rate</span>
+              <button
+                className={`toggle-button ${
+                  disableThirtyFpsLock ? 'inactive' : 'active'
+                }`}
+                type="button"
+                disabled={isCompiling}
+                aria-label={
+                  disableThirtyFpsLock ? 'Enable 30 fps lock' : 'Disable 30 fps lock'
+                }
+                aria-pressed={!disableThirtyFpsLock}
+                onClick={() => setDisableThirtyFpsLock((current) => !current)}
+              >
+                <strong>
+                  {disableThirtyFpsLock
+                    ? '30 fps lock disabled'
+                    : `30 fps lock enabled (${LOCKED_FRAME_RATE} fps)`}
+                </strong>
+                <small>
+                  {disableThirtyFpsLock
+                    ? 'Source frame rates pass through unchanged.'
+                    : `All exports are resampled to ${LOCKED_FRAME_RATE} fps by default.`}
+                </small>
+              </button>
+            </label>
           </div>
 
           <div className="spec-grid">
@@ -992,9 +1084,7 @@ function App() {
             </div>
             <div>
               <span>Video target</span>
-              <strong>
-                {TARGET_WIDTH}x{TARGET_HEIGHT}, H.264 High, yuv420p
-              </strong>
+              <strong>{videoTargetLabel}</strong>
             </div>
             <div>
               <span>Audio target</span>
@@ -1088,6 +1178,7 @@ async function buildZipArchive(
   version: string,
   settings: PackSettings,
   preset: EncodingPreset,
+  disableThirtyFpsLock: boolean,
   jobs: CompileJob[],
   builtAssets: Map<string, BuiltAsset>,
 ) {
@@ -1128,6 +1219,11 @@ ${clipLines}
 ## Output format
 
 - MP4 video encoded as H.264 High / yuv420p at ${TARGET_WIDTH}x${TARGET_HEIGHT}
+- Frame rate: ${
+    disableThirtyFpsLock
+      ? 'source FPS preserved'
+      : `locked to ${LOCKED_FRAME_RATE} fps`
+  }
 - Matching OGG sidecar audio when an audio stream was present in the source
 - Encode preset: ${preset.label} (x264 ${preset.videoPreset}, CRF ${preset.crf}, OGG q${preset.audioQuality})
 - Filenames prefixed numerically so DrivingRangeTheater plays them in queue order

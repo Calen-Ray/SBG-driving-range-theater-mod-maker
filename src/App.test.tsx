@@ -168,7 +168,7 @@ describe('App', () => {
     )
 
     await user.click(
-      screen.getByText('Quality').closest('button') as HTMLButtonElement,
+      screen.getByRole('button', { name: /goodbest final output/i }),
     )
     await user.click(screen.getByRole('button', { name: /build content pack/i }))
 
@@ -194,9 +194,56 @@ describe('App', () => {
     const audioCall = ffmpegTestState.instances[0].exec.mock.calls.find(
       ([args]) => (args as string[]).includes('-c:a'),
     )?.[0] as string[]
+    const videoFilter = encodeCall[encodeCall.indexOf('-vf') + 1]
 
     expect(encodeCall).toContain('medium')
     expect(encodeCall).toContain('19')
+    expect(videoFilter).toContain('fps=30')
     expect(audioCall).toContain('5')
+  })
+
+  it('can disable the default 30 fps lock', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<App />)
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+
+    await user.upload(
+      input,
+      new File(['clip'], 'free-run.mp4', { type: 'video/mp4' }),
+    )
+
+    await user.click(screen.getByRole('button', { name: /disable 30 fps lock/i }))
+    await user.click(
+      screen.getByText('Fastest').closest('button') as HTMLButtonElement,
+    )
+    await user.click(screen.getByRole('button', { name: /build content pack/i }))
+
+    await waitFor(() => {
+      expect(ffmpegTestState.instances[0].exec).toHaveBeenCalled()
+    })
+
+    const encodeCall = ffmpegTestState.instances[0].exec.mock.calls.find(
+      ([args]) => (args as string[]).includes('-c:v'),
+    )?.[0] as string[]
+    const videoFilter = encodeCall[encodeCall.indexOf('-vf') + 1]
+
+    expect(encodeCall).toContain('veryfast')
+    expect(videoFilter).not.toContain('fps=30')
+  })
+
+  it('shows the active step while compiling', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<App />)
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+
+    await user.upload(
+      input,
+      new File(['clip'], 'countdown.mp4', { type: 'video/mp4' }),
+    )
+
+    await user.click(screen.getByRole('button', { name: /build content pack/i }))
+
+    expect(await screen.findByText('Current step')).toBeInTheDocument()
+    expect(await screen.findByText('Pack ready')).toBeInTheDocument()
   })
 })
