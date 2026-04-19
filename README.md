@@ -18,6 +18,19 @@ npm install
 npm run dev
 ```
 
+## Test
+
+```bash
+npm run test
+```
+
+The local suite covers:
+
+- queue normalization and filename generation
+- compatibility fallback for browsers without `crypto.randomUUID()`
+- drag-and-drop queueing
+- mocked end-to-end pack builds across preset selection and FFmpeg load configuration
+
 ## Build
 
 ```bash
@@ -30,7 +43,7 @@ The output is written to `dist/` and is configured with a relative Vite `base`, 
 
 Two workflows are included under `.github/workflows/`:
 
-- `ci.yml` runs `npm run lint` and `npm run build` on pushes and pull requests
+- `ci.yml` runs `npm run lint`, `npm run test`, and `npm run build` on pushes and pull requests
 - `deploy-pages.yml` builds `dist/` and deploys it to GitHub Pages from `main`
 
 After pushing to GitHub, enable Pages in the repository settings and set the source to **GitHub Actions**.

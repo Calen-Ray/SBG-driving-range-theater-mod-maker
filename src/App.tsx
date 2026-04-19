@@ -7,11 +7,24 @@ import {
   type DragEvent,
 } from 'react'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { fetchFile } from '@ffmpeg/util'
+import { fetchFile, toBlobURL } from '@ffmpeg/util'
 import JSZip from 'jszip'
-import ffmpegWorkerUrl from '@ffmpeg/ffmpeg/worker?url'
 import ffmpegCoreUrl from '@ffmpeg/core?url'
 import ffmpegCoreWasmUrl from '@ffmpeg/core/wasm?url'
+import {
+  createJob,
+  formatBytes,
+  formatClock,
+  formatEta,
+  getTimestamp,
+  hasVideoDrag,
+  makeWorkspaceName,
+  normalizeJobs,
+  sanitizeManifestName,
+  sanitizeVersion,
+  trimForIcon,
+  type CompileJob,
+} from './lib/compiler-utils'
 import './App.css'
 
 const MAX_FILES = 20
@@ -19,31 +32,7 @@ const TARGET_WIDTH = 1920
 const TARGET_HEIGHT = 1080
 const THEATER_DEPENDENCY = 'Cray-DrivingRangeTheater-0.1.0'
 
-type JobStatus =
-  | 'queued'
-  | 'probing'
-  | 'encoding'
-  | 'extracting'
-  | 'done'
-  | 'error'
-
 type JobStage = 'idle' | 'probing' | 'encoding' | 'extracting'
-
-type CompileJob = {
-  id: string
-  file: File
-  order: number
-  status: JobStatus
-  progress: number
-  etaSeconds: number | null
-  outputVideoName: string
-  outputAudioName: string
-  durationSeconds: number | null
-  hasAudio: boolean | null
-  error: string | null
-  videoSize: number | null
-  audioSize: number | null
-}
 
 type PackSettings = {
   namespace: string
@@ -427,11 +416,19 @@ function App() {
     setFfmpegState('loading')
     setEngineMessage('Loading FFmpeg core and WebAssembly runtime...')
 
-    await ffmpegRef.current.load({
-      classWorkerURL: ffmpegWorkerUrl,
-      coreURL: ffmpegCoreUrl,
-      wasmURL: ffmpegCoreWasmUrl,
-    })
+    try {
+      const coreURL = await toBlobURL(ffmpegCoreUrl, 'text/javascript')
+      const wasmURL = await toBlobURL(ffmpegCoreWasmUrl, 'application/wasm')
+
+      await ffmpegRef.current.load({
+        coreURL,
+        wasmURL,
+      })
+    } catch (error) {
+      setFfmpegState('idle')
+      setEngineMessage('FFmpeg failed to load. Check browser console or try a Chromium-based browser.')
+      throw error
+    }
 
     setFfmpegState('ready')
     setEngineMessage('FFmpeg core loaded in browser memory.')
@@ -1276,148 +1273,6 @@ async function cleanupWorkspace(ffmpeg: FFmpeg, paths: string[]) {
       // Best-effort cleanup so subsequent jobs start with a clean workspace.
     }
   }
-}
-
-function createJob(file: File): CompileJob {
-  return {
-    id: buildJobId(file),
-    file,
-    order: 0,
-    status: 'queued',
-    progress: 0,
-    etaSeconds: null,
-    outputVideoName: '',
-    outputAudioName: '',
-    durationSeconds: null,
-    hasAudio: null,
-    error: null,
-    videoSize: null,
-    audioSize: null,
-  }
-}
-
-function normalizeJobs(jobs: CompileJob[]): CompileJob[] {
-  const seen = new Map<string, number>()
-
-  return jobs.map((job, index) => {
-    const safeStem = sanitizeClipStem(removeExtension(job.file.name))
-    const count = (seen.get(safeStem) ?? 0) + 1
-    seen.set(safeStem, count)
-    const uniqueStem = count > 1 ? `${safeStem}-${count}` : safeStem
-    const prefix = String(index + 1).padStart(2, '0')
-
-    return {
-      ...job,
-      order: index + 1,
-      outputVideoName: `${prefix}-${uniqueStem}.mp4`,
-      outputAudioName: `${prefix}-${uniqueStem}.ogg`,
-      status: 'queued',
-      progress: 0,
-      etaSeconds: null,
-      error: null,
-      videoSize: null,
-      audioSize: null,
-      durationSeconds: null,
-      hasAudio: null,
-    }
-  })
-}
-
-function removeExtension(name: string) {
-  return name.replace(/\.[^.]+$/, '')
-}
-
-function sanitizeClipStem(value: string) {
-  return (
-    value
-      .normalize('NFKD')
-      .replace(/[^\w\s-]/g, ' ')
-      .replace(/[_\s]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-      .toLowerCase() || 'clip'
-  )
-}
-
-function sanitizeManifestName(value: string) {
-  return (
-    value
-      .normalize('NFKD')
-      .replace(/[^\w]+/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 64)
-  )
-}
-
-function sanitizeVersion(value: string) {
-  const trimmed = value.trim()
-  return /^\d+\.\d+\.\d+$/.test(trimmed) ? trimmed : ''
-}
-
-function formatBytes(value: number) {
-  if (!value) {
-    return '0 B'
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB']
-  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
-  const amount = value / 1024 ** exponent
-  return `${amount.toFixed(amount >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`
-}
-
-function formatClock(seconds: number) {
-  const total = Math.max(Math.round(seconds), 0)
-  const minutes = Math.floor(total / 60)
-  const remainder = total % 60
-  return `${minutes}:${String(remainder).padStart(2, '0')}`
-}
-
-function formatEta(seconds: number) {
-  const total = Math.max(Math.round(seconds), 0)
-  if (total < 60) {
-    return `${total}s`
-  }
-
-  const minutes = Math.floor(total / 60)
-  const remainder = total % 60
-  return `${minutes}m ${String(remainder).padStart(2, '0')}s`
-}
-
-function makeWorkspaceName(name: string, id: string, prefix: string) {
-  const safeName = name.replace(/[^\w.-]+/g, '-')
-  return `${prefix}-${id.slice(0, 8)}-${safeName}`
-}
-
-function trimForIcon(value: string) {
-  return value.trim().slice(0, 18).toUpperCase() || 'VIDEO PACK'
-}
-
-function getTimestamp() {
-  return performance.now()
-}
-
-function buildJobId(file: File) {
-  return `${file.name}-${file.size}-${file.lastModified}-${createUniqueToken()}`
-}
-
-function createUniqueToken() {
-  if (
-    typeof globalThis.crypto !== 'undefined' &&
-    typeof globalThis.crypto.randomUUID === 'function'
-  ) {
-    return globalThis.crypto.randomUUID()
-  }
-
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-function hasVideoDrag(dataTransfer: DataTransfer | null) {
-  if (!dataTransfer) {
-    return false
-  }
-
-  return Array.from(dataTransfer.types).includes('Files')
 }
 
 export default App
